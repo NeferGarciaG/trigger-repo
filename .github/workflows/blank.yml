@@ -9,6 +9,8 @@ jobs:
     steps:
       - name: Show payload
         run: |
-          echo "Event type: ${{ github.event.action }}"
-          echo "Payload:"
-          echo '${{ toJson(github.event.client_payload) }}'
+          echo "App: ${{ github.event.client_payload.app }}"
+          echo "Env: ${{ github.event.client_payload.env }}"
+          echo "Revision: ${{ github.event.client_payload.revision }}"
+          echo "Health: ${{ github.event.client_payload.health }}"
+          echo "Argo link: ${{ github.event.client_payload.argo_link }}"
