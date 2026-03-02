@@ -34,7 +34,7 @@ jobs:
     if: needs.check-release.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Show payload
+      - name: Run pipeline (trigger-repo)
         run: |
           echo "App:      ${{ github.event.client_payload.app }}"
           echo "Env:      ${{ github.event.client_payload.env }}"
@@ -42,4 +42,27 @@ jobs:
           echo "Health:   ${{ github.event.client_payload.health }}"
           echo "Argo:     ${{ github.event.client_payload.argo_link }}"
 
-      # Agrega aquí los steps reales del pipeline de este servicio
+  notify-downstream:
+    needs: check-release
+    if: needs.check-release.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    # En producción real esto no existe — cada servicio tiene su propia
+    # ArgoCD Application que notifica directamente a su repo.
+    # Aquí lo simulamos desde trigger-repo porque el POC tiene una sola Application.
+    strategy:
+      matrix:
+        repo:
+          - NeferGarciaG/trigger-repo-2
+          - NeferGarciaG/trigger-repo-3
+    steps:
+      - name: Dispatch to ${{ matrix.repo }}
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ matrix.repo }}/dispatches \
+            -f event_type=argo_deploy \
+            -F client_payload='${{ toJson(github.event.client_payload) }}'
