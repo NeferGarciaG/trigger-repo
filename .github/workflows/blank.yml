@@ -1,29 +1,19 @@
-name: Fan-out Dispatcher
+name: Pipeline on Argo Deploy
 
 on:
   repository_dispatch:
     types: [argo_deploy]
 
 jobs:
-  dispatch:
+  run-pipeline:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Dispatch to all targets
-        env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
-          PAYLOAD: ${{ toJson(github.event.client_payload) }}
+      - name: Show payload
         run: |
-          while IFS= read -r repo; do
-            # Saltar líneas vacías y comentarios
-            [[ -z "$repo" || "$repo" == \#* ]] && continue
-            echo "Dispatching to $repo"
-            gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/$repo/dispatches \
-              -f event_type=argo_deploy \
-              -F client_payload="$PAYLOAD"
-          done < targets.txt
+          echo "App:      ${{ github.event.client_payload.app }}"
+          echo "Env:      ${{ github.event.client_payload.env }}"
+          echo "Revision: ${{ github.event.client_payload.revision }}"
+          echo "Health:   ${{ github.event.client_payload.health }}"
+          echo "Argo:     ${{ github.event.client_payload.argo_link }}"
+
+      # Agrega aquí los steps reales del pipeline de este servicio
