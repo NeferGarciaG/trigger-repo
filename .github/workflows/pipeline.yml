@@ -5,7 +5,65 @@ on:
     types: [argo_deploy]
 
 jobs:
+  # Job 1: registra el servicio como saludable en argo-github via commit status
+  set-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set commit status for this service
+        env:
+          GH_TOKEN: ${{ secrets.GH_ARGO_TOKEN }}
+          REVISION: ${{ github.event.client_payload.revision }}
+          APP: ${{ github.event.client_payload.app }}
+        run: |
+          echo "📌 Registrando status para $APP @ $REVISION"
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/NeferGarciaG/argo-github/statuses/$REVISION \
+            -f state=success \
+            -f context="argocd/$APP" \
+            -f description="Healthy y Synced en ArgoCD"
+
+  # Job 2: verifica si los 3 servicios (svc-a-dev, svc-b-dev, svc-c-dev) están OK
+  check-all-healthy:
+    needs: set-status
+    runs-on: ubuntu-latest
+    outputs:
+      all_healthy: ${{ steps.check.outputs.all_healthy }}
+    steps:
+      - name: Check if all 3 services are healthy
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GH_ARGO_TOKEN }}
+          REVISION: ${{ github.event.client_payload.revision }}
+          APP: ${{ github.event.client_payload.app }}
+        run: |
+          echo "🔍 Verificando salud de todos los servicios @ $REVISION (disparado por $APP)"
+
+          STATUSES=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            /repos/NeferGarciaG/argo-github/commits/$REVISION/statuses)
+
+          SVC_A=$(echo "$STATUSES" | jq '[.[] | select(.context == "argocd/svc-a-dev" and .state == "success")] | length')
+          SVC_B=$(echo "$STATUSES" | jq '[.[] | select(.context == "argocd/svc-b-dev" and .state == "success")] | length')
+          SVC_C=$(echo "$STATUSES" | jq '[.[] | select(.context == "argocd/svc-c-dev" and .state == "success")] | length')
+
+          echo "  svc-a-dev: $SVC_A"
+          echo "  svc-b-dev: $SVC_B"
+          echo "  svc-c-dev: $SVC_C"
+
+          if [ "$SVC_A" -gt 0 ] && [ "$SVC_B" -gt 0 ] && [ "$SVC_C" -gt 0 ]; then
+            echo "all_healthy=true" >> $GITHUB_OUTPUT
+            echo "✅ Los 3 servicios están Healthy — continuando"
+          else
+            echo "all_healthy=false" >> $GITHUB_OUTPUT
+            echo "⏳ No todos los servicios están Healthy — pipeline en espera"
+          fi
+
+  # Job 3: verifica si el commit contiene [release]
   check-release:
+    needs: check-all-healthy
+    if: needs.check-all-healthy.outputs.all_healthy == 'true'
     runs-on: ubuntu-latest
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
@@ -13,7 +71,7 @@ jobs:
       - name: Check if revision is a release commit
         id: check
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_ARGO_TOKEN }}
           REVISION: ${{ github.event.client_payload.revision }}
           SOURCE_REPO: NeferGarciaG/argo-github
         run: |
@@ -22,23 +80,24 @@ jobs:
           echo "Message  : $COMMIT_MSG"
 
           if echo "$COMMIT_MSG" | grep -qi "\[release\]"; then
-            echo "is_release=true"  >> $GITHUB_OUTPUT
-            echo "✅ Release commit — pipeline will run"
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "✅ Release commit — pipeline correrá"
           else
             echo "is_release=false" >> $GITHUB_OUTPUT
-            echo "⏭️  Not a release commit — skipping"
+            echo "⏭️  No es un release commit — skipping"
           fi
 
+  # Job 4: ejecuta el pipeline real (solo si todos los servicios están OK y es [release])
   run-pipeline:
     needs: check-release
     if: needs.check-release.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Run pipeline (trigger-repo / svc-a)
+      - name: Run pipeline (todos los servicios healthy + commit [release])
         run: |
-          echo "App:      ${{ github.event.client_payload.app }}"
-          echo "Env:      ${{ github.event.client_payload.env }}"
-          echo "Revision: ${{ github.event.client_payload.revision }}"
-          echo "Health:   ${{ github.event.client_payload.health }}"
-          echo "Argo:     ${{ github.event.client_payload.argo_link }}"
-
+          echo "🚀 Ejecutando pipeline"
+          echo "App que disparó : ${{ github.event.client_payload.app }}"
+          echo "Env             : ${{ github.event.client_payload.env }}"
+          echo "Revision        : ${{ github.event.client_payload.revision }}"
+          echo "Health          : ${{ github.event.client_payload.health }}"
+          echo "Argo link       : ${{ github.event.client_payload.argo_link }}"
