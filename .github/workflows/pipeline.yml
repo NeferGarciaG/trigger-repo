@@ -5,7 +5,7 @@ on:
     types: [argo_deploy]
 
 jobs:
-  # Job 1: registra el servicio que acaba de deployar como healthy
+  # Job 1: registers the service that just deployed as healthy
   set-status:
     runs-on: ubuntu-latest
     steps:
@@ -15,16 +15,16 @@ jobs:
           REVISION: ${{ github.event.client_payload.revision }}
           APP: ${{ github.event.client_payload.app }}
         run: |
-          echo "📌 Registrando $APP como healthy @ $REVISION"
+          echo "📌 Registering $APP as healthy @ $REVISION"
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
             /repos/NeferGarciaG/argo-github/statuses/$REVISION \
             -f state=success \
             -f context="argocd/$APP" \
-            -f description="Deployed healthy por ArgoCD"
+            -f description="Deployed healthy by ArgoCD"
 
-  # Job 2: detecta qué servicios cambiaron en este commit y valida que todos estén healthy
+  # Job 2: detects which services changed in this commit and validates all are healthy
   detect-and-check:
     needs: set-status
     runs-on: ubuntu-latest
@@ -40,26 +40,26 @@ jobs:
           REVISION: ${{ github.event.client_payload.revision }}
           APP: ${{ github.event.client_payload.app }}
         run: |
-          echo "🔍 Detectando servicios que cambiaron en $REVISION (disparado por $APP)"
+          echo "🔍 Detecting services changed in $REVISION (triggered by $APP)"
 
-          # Obtener archivos modificados en este commit
+          # Get modified files in this commit
           CHANGED_FILES=$(gh api \
             -H "Accept: application/vnd.github+json" \
             /repos/NeferGarciaG/argo-github/commits/$REVISION \
             --jq '.files[].filename')
 
-          echo "Archivos modificados:"
+          echo "Modified files:"
           echo "$CHANGED_FILES"
 
-          # Mapear rutas de overlays a nombres de Application CRs
-          # Patrón: svc-X/overlays/dev/... -> svc-X-dev
+          # Map overlay paths to Application CR names
+          # Pattern: svc-X/overlays/dev/... -> svc-X-dev
           CHANGED_SERVICES=$(echo "$CHANGED_FILES" \
             | grep -oP '^svc-[^/]+(?=/overlays/dev/)' \
             | sort -u \
             | sed 's/$/-dev/')
 
           if [ -z "$CHANGED_SERVICES" ]; then
-            echo "ℹ️  Ningún overlay de servicio cambió en este commit — nada que validar"
+            echo "ℹ️  No service overlays changed in this commit — nothing to validate"
             echo "all_changed_healthy=true" >> $GITHUB_OUTPUT
             echo "changed_services=" >> $GITHUB_OUTPUT
             echo "failed_services=" >> $GITHUB_OUTPUT
@@ -67,10 +67,10 @@ jobs:
           fi
 
           echo ""
-          echo "Servicios con cambios en este commit:"
+          echo "Services with changes in this commit:"
           echo "$CHANGED_SERVICES"
 
-          # Obtener commit statuses actuales para esta revisión
+          # Get current commit statuses for this revision
           STATUSES=$(gh api \
             -H "Accept: application/vnd.github+json" \
             /repos/NeferGarciaG/argo-github/commits/$REVISION/statuses)
@@ -89,13 +89,13 @@ jobs:
             if [ "$STATUS_COUNT" -gt 0 ]; then
               echo "  ✅ $SVC — healthy"
             else
-              echo "  ❌ $SVC — NO reportó healthy (degradado o aún desplegando)"
+              echo "  ❌ $SVC — did not report healthy (degraded or still deploying)"
               ALL_HEALTHY=false
               FAILED+=("$SVC")
             fi
           done <<< "$CHANGED_SERVICES"
 
-          # Exportar resultados
+          # Export results
           CHANGED_STR=$(IFS=','; echo "${CHANGED_LIST[*]}")
           FAILED_STR=$(IFS=','; echo "${FAILED[*]}")
 
@@ -105,15 +105,15 @@ jobs:
           if [ "$ALL_HEALTHY" = "true" ]; then
             echo "all_changed_healthy=true" >> $GITHUB_OUTPUT
             echo ""
-            echo "✅ Todos los servicios modificados están healthy"
+            echo "✅ All modified services are healthy"
           else
             echo "all_changed_healthy=false" >> $GITHUB_OUTPUT
             echo ""
-            echo "❌ Servicios con fallo: ${FAILED[*]}"
-            echo "⏳ Pipeline en espera — no todos los cambios están healthy"
+            echo "❌ Failed services: ${FAILED[*]}"
+            echo "⏳ Pipeline on hold — not all changes are healthy"
           fi
 
-  # Job 3: verifica si el commit contiene [release]
+  # Job 3: checks if the commit contains [release]
   check-release:
     needs: detect-and-check
     if: needs.detect-and-check.outputs.all_changed_healthy == 'true'
@@ -134,13 +134,13 @@ jobs:
 
           if echo "$COMMIT_MSG" | grep -qi "\[release\]"; then
             echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "✅ Release commit — pipeline correrá"
+            echo "✅ Release commit — pipeline will run"
           else
             echo "is_release=false" >> $GITHUB_OUTPUT
-            echo "⏭️  No es un release commit — skipping"
+            echo "⏭️  Not a release commit — skipping"
           fi
 
-  # Job 4: ejecuta el pipeline real
+  # Job 4: runs the actual pipeline
   run-pipeline:
     needs: [detect-and-check, check-release]
     if: needs.check-release.outputs.is_release == 'true'
@@ -148,9 +148,9 @@ jobs:
     steps:
       - name: Run pipeline
         run: |
-          echo "🚀 Ejecutando pipeline"
-          echo "Servicios que cambiaron : ${{ needs.detect-and-check.outputs.changed_services }}"
-          echo "App que disparó         : ${{ github.event.client_payload.app }}"
+          echo "🚀 Running pipeline"
+          echo "Changed services        : ${{ needs.detect-and-check.outputs.changed_services }}"
+          echo "Triggered by app        : ${{ github.event.client_payload.app }}"
           echo "Env                     : ${{ github.event.client_payload.env }}"
           echo "Revision                : ${{ github.event.client_payload.revision }}"
           echo "Argo link               : ${{ github.event.client_payload.argo_link }}"
