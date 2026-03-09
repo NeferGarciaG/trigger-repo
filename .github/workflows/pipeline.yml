@@ -8,8 +8,14 @@ jobs:
   # Job 1: registers the service that just deployed as healthy
   set-status:
     runs-on: ubuntu-latest
+    container:
+      image: alpine:3.22
     steps:
+      - name: Install dependencies
+        run: apk add --no-cache bash curl jq github-cli
+
       - name: Set commit status for this service
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_ARGO_TOKEN }}
           REVISION: ${{ github.event.client_payload.revision }}
@@ -28,13 +34,19 @@ jobs:
   detect-and-check:
     needs: set-status
     runs-on: ubuntu-latest
+    container:
+      image: alpine:3.22
     outputs:
       all_changed_healthy: ${{ steps.check.outputs.all_changed_healthy }}
       changed_services: ${{ steps.check.outputs.changed_services }}
       failed_services: ${{ steps.check.outputs.failed_services }}
     steps:
+      - name: Install dependencies
+        run: apk add --no-cache bash curl jq github-cli
+
       - name: Detect changed services and check health
         id: check
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_ARGO_TOKEN }}
           REVISION: ${{ github.event.client_payload.revision }}
@@ -52,9 +64,11 @@ jobs:
           echo "$CHANGED_FILES"
 
           # Map overlay paths to Application CR names
+          # grep -E + sed replaces grep -oP (no PCRE in Alpine busybox grep)
           # Pattern: svc-X/overlays/stg/... -> svc-X-stg
           CHANGED_SERVICES=$(echo "$CHANGED_FILES" \
-            | grep -oP '^svc-[^/]+(?=/overlays/stg/)' \
+            | grep '/overlays/stg/' \
+            | grep -oE '^svc-[^/]+' \
             | sort -u \
             | sed 's/$/-stg/')
 
@@ -118,11 +132,17 @@ jobs:
     needs: detect-and-check
     if: needs.detect-and-check.outputs.all_changed_healthy == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: alpine:3.22
     outputs:
       is_release: ${{ steps.check.outputs.is_release }}
     steps:
+      - name: Install dependencies
+        run: apk add --no-cache bash curl jq github-cli
+
       - name: Check if revision is a release commit
         id: check
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_ARGO_TOKEN }}
           REVISION: ${{ github.event.client_payload.revision }}
@@ -145,8 +165,11 @@ jobs:
     needs: [detect-and-check, check-release]
     if: needs.check-release.outputs.is_release == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: alpine:3.22
     steps:
       - name: Run pipeline
+        shell: bash
         run: |
           echo "🚀 Running pipeline"
           echo "Changed services        : ${{ needs.detect-and-check.outputs.changed_services }}"
