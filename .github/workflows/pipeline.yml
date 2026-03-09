@@ -52,11 +52,11 @@ jobs:
           echo "$CHANGED_FILES"
 
           # Map overlay paths to Application CR names
-          # Pattern: svc-X/overlays/dev/... -> svc-X-dev
+          # Pattern: svc-X/overlays/stg/... -> svc-X-stg
           CHANGED_SERVICES=$(echo "$CHANGED_FILES" \
-            | grep -oP '^svc-[^/]+(?=/overlays/dev/)' \
+            | grep -oP '^svc-[^/]+(?=/overlays/stg/)' \
             | sort -u \
-            | sed 's/$/-dev/')
+            | sed 's/$/-stg/')
 
           if [ -z "$CHANGED_SERVICES" ]; then
             echo "ℹ️  No service overlays changed in this commit — nothing to validate"
