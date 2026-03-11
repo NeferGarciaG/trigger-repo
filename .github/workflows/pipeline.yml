@@ -4,6 +4,31 @@ on:
   repository_dispatch:
     types: [argo_deploy]
 
+# ── Configuración por entorno ────────────────────────────────────────────────
+#
+#   POC (argo-github, paths: svc-a/overlays/stg/...):
+#     STATE_REPO:          NeferGarciaG/argo-github
+#     OVERLAY_PATH_FILTER: /overlays/stg/
+#     SERVICE_SED:         s|/overlays/stg/.*||
+#     APP_SUFFIX:          -stg
+#
+#   Producción (yp-state, paths: overlays/bp-alias-connection/dev/kustomization.yaml):
+#     STATE_REPO:          vgitapps/yp-state-ads-us-lower-envs
+#     OVERLAY_PATH_FILTER: /overlays/[^/]*/dev/
+#     SERVICE_SED:         s|^overlays/||;s|/dev/.*||
+#     APP_SUFFIX:          -dev
+#     ejemplo: overlays/bp-alias-connection/dev/kustomization.yaml → bp-alias-connection → bp-alias-connection-dev
+#
+#   Nota multi-cluster: el ApplicationSet genera nombres con sufijo de cluster
+#   (bp-alias-connection-dev-north-virginia-cde). El pipeline usa prefix matching:
+#   busca statuses cuyo context empiece con "argocd/<SVC>" en lugar de exact match.
+# ────────────────────────────────────────────────────────────────────────────
+env:
+  STATE_REPO: NeferGarciaG/argo-github
+  OVERLAY_PATH_FILTER: /overlays/stg/
+  SERVICE_SED: 's|/overlays/stg/.*||'
+  APP_SUFFIX: -stg
+
 jobs:
   # Job 1: registers the service that just deployed as healthy
   set-status:
@@ -25,7 +50,7 @@ jobs:
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            /repos/NeferGarciaG/argo-github/statuses/$REVISION \
+            /repos/$STATE_REPO/statuses/$REVISION \
             -f state=success \
             -f context="argocd/$APP" \
             -f description="Deployed healthy by ArgoCD"
@@ -57,20 +82,20 @@ jobs:
           # Get modified files in this commit
           CHANGED_FILES=$(gh api \
             -H "Accept: application/vnd.github+json" \
-            /repos/NeferGarciaG/argo-github/commits/$REVISION \
+            /repos/$STATE_REPO/commits/$REVISION \
             --jq '.files[].filename')
 
           echo "Modified files:"
           echo "$CHANGED_FILES"
 
-          # Map overlay paths to Application CR names
-          # grep -E + sed replaces grep -oP (no PCRE in Alpine busybox grep)
-          # Pattern: svc-X/overlays/stg/... -> svc-X-stg
+          # Map overlay paths to Application CR names using configurable sed expression
+          # POC:  svc-a/overlays/stg/file  → svc-a  → svc-a-stg
+          # Prod: overlays/auth/stg/file   → auth   → auth-stg
           CHANGED_SERVICES=$(echo "$CHANGED_FILES" \
-            | grep '/overlays/stg/' \
-            | grep -oE '^svc-[^/]+' \
+            | grep "$OVERLAY_PATH_FILTER" \
+            | sed "$SERVICE_SED" \
             | sort -u \
-            | sed 's/$/-stg/')
+            | sed "s/$/$APP_SUFFIX/")
 
           if [ -z "$CHANGED_SERVICES" ]; then
             echo "ℹ️  No service overlays changed in this commit — nothing to validate"
@@ -87,7 +112,7 @@ jobs:
           # Get current commit statuses for this revision
           STATUSES=$(gh api \
             -H "Accept: application/vnd.github+json" \
-            /repos/NeferGarciaG/argo-github/commits/$REVISION/statuses)
+            /repos/$STATE_REPO/commits/$REVISION/statuses)
 
           ALL_HEALTHY=true
           FAILED=()
@@ -96,9 +121,11 @@ jobs:
           while IFS= read -r SVC; do
             [ -z "$SVC" ] && continue
             CHANGED_LIST+=("$SVC")
+            # Prefix matching: handles both single-cluster (exact: "argocd/svc-a-stg")
+            # and multi-cluster (prefix: "argocd/bp-alias-connection-dev-north-virginia-cde")
             STATUS_COUNT=$(echo "$STATUSES" | jq \
-              --arg ctx "argocd/$SVC" \
-              '[.[] | select(.context == $ctx and .state == "success")] | length')
+              --arg prefix "argocd/$SVC" \
+              '[.[] | select(.context | startswith($prefix)) | select(.state == "success")] | length')
 
             if [ "$STATUS_COUNT" -gt 0 ]; then
               echo "  ✅ $SVC — healthy"
@@ -146,9 +173,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_ARGO_TOKEN }}
           REVISION: ${{ github.event.client_payload.revision }}
-          SOURCE_REPO: NeferGarciaG/argo-github
         run: |
-          COMMIT_MSG=$(gh api /repos/$SOURCE_REPO/commits/$REVISION --jq '.commit.message')
+          COMMIT_MSG=$(gh api /repos/$STATE_REPO/commits/$REVISION --jq '.commit.message')
           echo "Revision : $REVISION"
           echo "Message  : $COMMIT_MSG"
 
@@ -168,6 +194,9 @@ jobs:
     container:
       image: alpine:3.22
     steps:
+      - name: Install dependencies
+        run: apk add --no-cache bash
+
       - name: Run pipeline
         shell: bash
         run: |
